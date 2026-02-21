@@ -400,6 +400,19 @@ try
         // containerOptions.InitProcessOptions.User;
     }
 
+    auto convertedVolumes = std::make_unique<WSLA_VOLUME[]>(internalContainerSettings->volumesCount);
+    for (uint32_t i = 0; i < internalContainerSettings->volumesCount; ++i)
+    {
+        const WslcContainerVolume& internalVolume = internalContainerSettings->volumes[i];
+        WSLA_VOLUME& convertedVolume = convertedVolumes[i];
+
+        convertedVolume.HostPath = internalVolume.windowsPath;
+        convertedVolume.ContainerPath = internalVolume.containerPath;
+        convertedVolume.ReadOnly = internalVolume.readOnly;
+    }
+    containerOptions.Volumes = convertedVolumes.get();
+    containerOptions.VolumesCount = static_cast<ULONG>(internalContainerSettings->volumesCount);
+
     // TODO: Implement
     // containerOptions.Volumes;
     // containerOptions.VolumesCount;
@@ -484,13 +497,16 @@ try
 }
 CATCH_RETURN();
 
-STDAPI WslcContainerSettingsAddVolume(_In_ WslcContainerSettings* containerSettings, _In_reads_(volumeCount) const WslcContainerVolume* volumes, _In_ uint32_t volumeCount)
+STDAPI WslcContainerSettingsSetVolumes(
+    _In_ WslcContainerSettings* containerSettings, _In_reads_(volumeCount) const WslcContainerVolume* volumes, _In_ uint32_t volumeCount)
 try
 {
-    UNREFERENCED_PARAMETER(volumes);
-    UNREFERENCED_PARAMETER(volumeCount);
-    UNREFERENCED_PARAMETER(containerSettings);
-    return E_NOTIMPL;
+    auto internalType = CheckAndGetInternalType(containerSettings);
+
+    internalType->volumes = volumes;
+    internalType->volumesCount = volumeCount;
+
+    return S_OK;
 }
 CATCH_RETURN();
 
@@ -757,9 +773,23 @@ CATCH_RETURN();
 STDAPI WslcSessionImageLoad(_In_ WslcSession session, _In_ const WslcLoadImageOptions* options)
 try
 {
-    UNREFERENCED_PARAMETER(session);
-    UNREFERENCED_PARAMETER(options);
-    return E_NOTIMPL;
+    auto internalType = CheckAndGetInternalType(session);
+    RETURN_HR_IF_NULL(HRESULT_FROM_WIN32(ERROR_INVALID_STATE), internalType->session);
+    RETURN_HR_IF_NULL(E_POINTER, options);
+    RETURN_HR_IF(E_INVALIDARG, options->ImageHandle == nullptr || options->ImageHandle == INVALID_HANDLE_VALUE);
+    RETURN_HR_IF(E_INVALIDARG, options->ContentLength == 0);
+
+    auto progressCallback = ProgressCallback::CreateIf(options);
+
+    HRESULT hr = internalType->session->LoadImage(HandleToULong(options->ImageHandle), progressCallback.get(), options->ContentLength);
+
+    if (FAILED_LOG(hr))
+    {
+        // TODO: Expected error message changes
+        // GetErrorInfoFromCOM(errorMessage);
+    }
+
+    return hr;
 }
 CATCH_RETURN();
 
