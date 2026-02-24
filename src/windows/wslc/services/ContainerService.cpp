@@ -18,6 +18,7 @@ Abstract:
 #include <WSLAProcessLauncher.h>
 #include <docker_schema.h>
 #include <CommandLine.h>
+#include <unordered_map>
 
 namespace wsl::windows::wslc::services {
 using wsl::windows::common::ClientRunningWSLAProcess;
@@ -92,7 +93,7 @@ static wsl::windows::common::RunningWSLAContainer CreateInternal(
     return std::move(*runningContainer);
 }
 
-static void StopInternal(IWSLAContainer& container, int signal = WSLASignalNone, LONGLONG timeout = -1)
+static void StopInternal(IWSLAContainer& container, ULONG signal = WSLASignalNone, LONGLONG timeout = -1)
 {
     THROW_IF_FAILED(container.Stop(static_cast<WSLASignal>(signal), timeout)); // TODO: Error message
 }
