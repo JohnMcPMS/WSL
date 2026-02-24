@@ -90,6 +90,19 @@ WSLASignal ConvertSignal(WslcSignal signal)
     }
 }
 
+WSLA_CONTAINER_NETWORK_TYPE Convert(WslcContainerNetworkingMode mode)
+{
+    switch (mode)
+    {
+    case WSLC_CONTAINER_NETWORKING_MODE_NONE:
+        return WSLA_CONTAINER_NETWORK_NONE;
+    case WSLC_CONTAINER_NETWORKING_MODE_BRIDGED:
+        return WSLA_CONTAINER_NETWORK_BRIDGE;
+    default:
+        THROW_HR(E_INVALIDARG);
+    }
+}
+
 void GetErrorInfoFromCOM(PWSTR* errorMessage)
 {
     if (errorMessage)
@@ -217,15 +230,6 @@ try
     RETURN_HR_IF_NULL(HRESULT_FROM_WIN32(ERROR_INVALID_STATE), internalType->session);
 
     RETURN_HR(internalType->session->Terminate());
-}
-CATCH_RETURN();
-
-STDAPI WslcContainerSettingsSetNetworkingMode(_In_ WslcContainerSettings* containerSettings, _In_ WslcContainerNetworkingMode networkingMode)
-try
-{
-    UNREFERENCED_PARAMETER(networkingMode);
-    UNREFERENCED_PARAMETER(containerSettings);
-    return E_NOTIMPL;
 }
 CATCH_RETURN();
 
@@ -400,25 +404,45 @@ try
         // containerOptions.InitProcessOptions.User;
     }
 
-    auto convertedVolumes = std::make_unique<WSLA_VOLUME[]>(internalContainerSettings->volumesCount);
-    for (uint32_t i = 0; i < internalContainerSettings->volumesCount; ++i)
+    std::unique_ptr<WSLA_VOLUME[]> convertedVolumes;
+    if (internalContainerSettings->volumes && internalContainerSettings->volumesCount)
     {
-        const WslcContainerVolume& internalVolume = internalContainerSettings->volumes[i];
-        WSLA_VOLUME& convertedVolume = convertedVolumes[i];
+        convertedVolumes = std::make_unique<WSLA_VOLUME[]>(internalContainerSettings->volumesCount);
+        for (uint32_t i = 0; i < internalContainerSettings->volumesCount; ++i)
+        {
+            const WslcContainerVolume& internalVolume = internalContainerSettings->volumes[i];
+            WSLA_VOLUME& convertedVolume = convertedVolumes[i];
 
-        convertedVolume.HostPath = internalVolume.windowsPath;
-        convertedVolume.ContainerPath = internalVolume.containerPath;
-        convertedVolume.ReadOnly = internalVolume.readOnly;
+            convertedVolume.HostPath = internalVolume.windowsPath;
+            convertedVolume.ContainerPath = internalVolume.containerPath;
+            convertedVolume.ReadOnly = internalVolume.readOnly;
+        }
+        containerOptions.Volumes = convertedVolumes.get();
+        containerOptions.VolumesCount = static_cast<ULONG>(internalContainerSettings->volumesCount);
     }
-    containerOptions.Volumes = convertedVolumes.get();
-    containerOptions.VolumesCount = static_cast<ULONG>(internalContainerSettings->volumesCount);
 
-    // TODO: Implement
-    // containerOptions.Volumes;
-    // containerOptions.VolumesCount;
-    // containerOptions.Ports;
-    // containerOptions.PortsCount;
-    // containerOptions.ContainerNetwork;
+    std::unique_ptr<WSLA_PORT_MAPPING[]> convertedPorts;
+    if (internalContainerSettings->ports && internalContainerSettings->portsCount)
+    {
+        convertedPorts = std::make_unique<WSLA_PORT_MAPPING[]>(internalContainerSettings->portsCount);
+        for (uint32_t i = 0; i < internalContainerSettings->portsCount; ++i)
+        {
+            const WslcContainerPortMapping& internalPort = internalContainerSettings->ports[i];
+            WSLA_PORT_MAPPING& convertedPort = convertedPorts[i];
+
+            convertedPort.HostPort = internalPort.windowsPort;
+            convertedPort.ContainerPort = internalPort.containerPort;
+            // TODO: Only other supported value right now is AF_INET6; no user access.
+            convertedPort.Family = AF_INET;
+
+            // TODO: Unused protocol?
+            // TODO: Unused windowsAddress?
+        }
+        containerOptions.Ports = convertedPorts.get();
+        containerOptions.PortsCount = static_cast<ULONG>(internalContainerSettings->portsCount);
+    }
+
+    containerOptions.ContainerNetwork.ContainerNetworkType = internalContainerSettings->networking;
 
     // TODO: No user access
     // containerOptions.Entrypoint;
@@ -486,14 +510,28 @@ try
 }
 CATCH_RETURN();
 
+STDAPI WslcContainerSettingsSetNetworkingMode(_In_ WslcContainerSettings* containerSettings, _In_ WslcContainerNetworkingMode networkingMode)
+try
+{
+    auto internalType = CheckAndGetInternalType(containerSettings);
+
+    internalType->networking = Convert(networkingMode);
+
+    return S_OK;
+}
+CATCH_RETURN();
+
 STDAPI WslcContainerSettingsSetPortMapping(
     _In_ WslcContainerSettings* containerSettings, _In_reads_(portMappingCount) const WslcContainerPortMapping* portMappings, _In_ uint32_t portMappingCount)
 try
 {
-    UNREFERENCED_PARAMETER(portMappings);
-    UNREFERENCED_PARAMETER(containerSettings);
-    UNREFERENCED_PARAMETER(portMappingCount);
-    return E_NOTIMPL;
+    auto internalType = CheckAndGetInternalType(containerSettings);
+    RETURN_HR_IF(E_INVALIDARG, portMappings == nullptr && portMappingCount != 0);
+
+    internalType->ports = portMappings;
+    internalType->portsCount = portMappingCount;
+
+    return S_OK;
 }
 CATCH_RETURN();
 
@@ -502,6 +540,7 @@ STDAPI WslcContainerSettingsSetVolumes(
 try
 {
     auto internalType = CheckAndGetInternalType(containerSettings);
+    RETURN_HR_IF(E_INVALIDARG, volumes == nullptr && volumeCount != 0);
 
     internalType->volumes = volumes;
     internalType->volumesCount = volumeCount;
