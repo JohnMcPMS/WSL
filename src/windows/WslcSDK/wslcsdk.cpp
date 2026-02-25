@@ -364,6 +364,8 @@ try
     *internalType = {};
 
     internalType->image = imageName;
+    // Default network configuration to WSLC SDK `0`, which is NONE.
+    internalType->networking = WSLA_CONTAINER_NETWORK_NONE;
 
     return S_OK;
 }
@@ -663,10 +665,10 @@ try
     RETURN_HR_IF(
         E_INVALIDARG,
         (argv == nullptr && argc != 0) || (argv != nullptr && argc == 0) ||
-            (argc > static_cast<size_t>(std::numeric_limits<UINT32>::max())));
+            (argc > static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
 
     internalType->commandLine = argv;
-    internalType->commandLineCount = static_cast<UINT32>(argc);
+    internalType->commandLineCount = static_cast<uint32_t>(argc);
 
     return S_OK;
 }
@@ -675,10 +677,16 @@ CATCH_RETURN();
 STDAPI WslcProcessSettingsSetEnvVariables(_In_ WslcProcessSettings* processSettings, _In_reads_(argc) PCSTR const* key_value, size_t argc)
 try
 {
-    UNREFERENCED_PARAMETER(key_value);
-    UNREFERENCED_PARAMETER(argc);
-    UNREFERENCED_PARAMETER(processSettings);
-    return E_NOTIMPL;
+    auto internalType = CheckAndGetInternalType(processSettings);
+    RETURN_HR_IF(
+        E_INVALIDARG,
+        (key_value == nullptr && argc != 0) || (key_value != nullptr && argc == 0) ||
+            (argc > static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+
+    internalType->environment = key_value;
+    internalType->environmentCount = static_cast<uint32_t>(argc);
+
+    return S_OK;
 }
 CATCH_RETURN();
 
