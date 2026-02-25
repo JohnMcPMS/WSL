@@ -199,6 +199,43 @@ class WslcSdkTests
     WslcSession m_defaultSession = nullptr;
     static inline auto c_testSessionName = L"wslc-test";
 
+    static std::filesystem::path GetTestImagePath(std::string_view imageName)
+    {
+        std::filesystem::path result = std::filesystem::path{g_testDataPath};
+
+        if (imageName == "debian:latest")
+        {
+            result /= "debian-latest.tar";
+        }
+        else if (imageName == "python:3.12-alpine")
+        {
+            result /= "python-3_12-alpine.tar";
+        }
+        else
+        {
+            THROW_HR_MSG(E_INVALIDARG, "Unknown test image: %hs", imageName.data());
+        }
+
+        return result;
+    }
+
+    void LoadTestImage(std::string_view imageName)
+    {
+        std::filesystem::path imagePath = GetTestImagePath(imageName);
+        wil::unique_hfile imageFile{
+            CreateFileW(imagePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+        THROW_LAST_ERROR_IF(!imageFile);
+
+        LARGE_INTEGER fileSize{};
+        THROW_LAST_ERROR_IF(!GetFileSizeEx(imageFile.get(), &fileSize));
+
+        WslcLoadImageOptions options{};
+        options.ImageHandle = imageFile.get();
+        options.ContentLength = fileSize.QuadPart;
+
+        THROW_IF_FAILED(WslcSessionImageLoad(m_defaultSession, &options));
+    }
+
     TEST_CLASS_SETUP(TestClassSetup)
     {
         THROW_IF_WIN32_ERROR(WSAStartup(MAKEWORD(2, 2), &m_wsadata));
@@ -221,17 +258,9 @@ class WslcSdkTests
         VERIFY_SUCCEEDED(WslcSessionCreate(&sessionSettings, &m_defaultSession));
 
         // Pull images required by the tests (no-op if already present).
-        for (const char* image : {"debian:latest", "hello-world:linux", "python:3.12-alpine"})
+        for (const char* image : {"debian:latest", "python:3.12-alpine"})
         {
-            WslcPullImageOptions pullOptions{};
-            pullOptions.uri = image;
-            wil::unique_cotaskmem_string errorMsg;
-            const auto hr = WslcSessionImagePull(m_defaultSession, &pullOptions, &errorMsg);
-            if (FAILED(hr))
-            {
-                LogError("Failed to pull image '%hs': 0x%08x, %ls", image, hr, errorMsg ? errorMsg.get() : L"(no message)");
-                return false;
-            }
+            LoadTestImage(image);
         }
 
         return true;
@@ -365,9 +394,23 @@ class WslcSdkTests
         {
             WslcPullImageOptions opts{};
             opts.uri = "hello-world:linux";
-            PWSTR rawMsg = nullptr;
-            VERIFY_SUCCEEDED(WslcSessionImagePull(m_defaultSession, &opts, &rawMsg));
-            wil::unique_cotaskmem_string errorMsg{rawMsg};
+            wil::unique_cotaskmem_string errorMsg;
+            HRESULT pullResult = WslcSessionImagePull(m_defaultSession, &opts, &errorMsg);
+
+            // Skip test if error is due to rate limit.
+            if (pullResult == E_FAIL)
+            {
+                if (errorMsg)
+                {
+                    if (wcsstr(errorMsg.get(), L"toomanyrequests") != nullptr)
+                    {
+                        LogWarning("Skipping PullImage test due to rate limiting.");
+                        return;
+                    }
+                }
+            }
+
+            VERIFY_SUCCEEDED(pullResult);
 
             // Verify the image is usable by running a container from it.
             auto output = RunContainerAndCapture(m_defaultSession, "hello-world:linux", {});
@@ -378,9 +421,8 @@ class WslcSdkTests
         {
             WslcPullImageOptions opts{};
             opts.uri = "does-not:exist";
-            PWSTR rawMsg = nullptr;
-            VERIFY_FAILED(WslcSessionImagePull(m_defaultSession, &opts, &rawMsg));
-            wil::unique_cotaskmem_string errorMsg{rawMsg};
+            wil::unique_cotaskmem_string errorMsg;
+            VERIFY_FAILED(WslcSessionImagePull(m_defaultSession, &opts, &errorMsg));
 
             // An error message should be present.
             VERIFY_IS_NOT_NULL(errorMsg.get());
@@ -388,8 +430,8 @@ class WslcSdkTests
 
         // Negative: null options pointer must fail.
         {
-            PWSTR rawMsg = nullptr;
-            VERIFY_ARE_EQUAL(WslcSessionImagePull(m_defaultSession, nullptr, &rawMsg), E_POINTER);
+            wil::unique_cotaskmem_string errorMsg;
+            VERIFY_ARE_EQUAL(WslcSessionImagePull(m_defaultSession, nullptr, &errorMsg), E_POINTER);
         }
 
         // Negative: null URI inside options must fail.
