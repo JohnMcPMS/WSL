@@ -130,6 +130,15 @@ class WSLCCLIArgumentUnitTests
         VERIFY_THROWS(validation::GetWSLASignalFromString(L"999"), ArgumentException); // Out of range
         VERIFY_NO_THROW(validation::ValidateWSLASignalFromString({L"HUP", L"9", L"SIGKILL", L"stop"}, L"signalArg"));
         VERIFY_THROWS(validation::ValidateWSLASignalFromString({L"SIGHUP", L"999"}, L"signalArg"), ArgumentException); // 999 is out of range
+
+        // Verify format type
+        auto format = validation::GetFormatTypeFromString(L"json");
+        VERIFY_ARE_EQUAL(format, FormatType::Json);
+        format = validation::GetFormatTypeFromString(L"table");
+        VERIFY_ARE_EQUAL(format, FormatType::Table);
+        VERIFY_THROWS(validation::GetFormatTypeFromString(L"xml"), ArgumentException);
+        VERIFY_NO_THROW(validation::ValidateFormatTypeFromString({L"json", L"table"}, L"formatArg"));
+        VERIFY_THROWS(validation::ValidateFormatTypeFromString({L"JSON", L"TABLE", L"csv"}, L"formatArg"), ArgumentException);
     }
 
     // Test: Verify EnumVariantMap behavior with ArgTypes.

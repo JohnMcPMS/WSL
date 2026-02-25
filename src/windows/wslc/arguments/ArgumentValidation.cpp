@@ -29,6 +29,10 @@ void Argument::Validate(const ArgMap& execArgs) const
 {
     switch (m_argType)
     {
+    case ArgType::Format:
+        validation::ValidateFormatTypeFromString(execArgs.GetAll<ArgType::Format>(), m_name);
+        break;
+
     case ArgType::Signal:
         validation::ValidateWSLASignalFromString(execArgs.GetAll<ArgType::Signal>(), m_name);
         break;
@@ -115,4 +119,30 @@ WSLASignal GetWSLASignalFromString(const std::wstring& input, const std::wstring
 
     return static_cast<WSLASignal>(signalValue);
 }
+
+void ValidateFormatTypeFromString(const std::vector<std::wstring>& values, const std::wstring& argName)
+{
+    for (const auto& value : values)
+    {
+        std::ignore = GetFormatTypeFromString(value, argName);
+    }
+}
+
+FormatType GetFormatTypeFromString(const std::wstring& input, const std::wstring& argName)
+{
+    if (IsEqual(input, L"json"))
+    {
+        return FormatType::Json;
+    }
+    else if (IsEqual(input, L"table"))
+    {
+        return FormatType::Table;
+    }
+    else
+    {
+        throw ArgumentException(std::format(
+            L"Invalid {} value: {} is not a recognized format type. Supported format types are: json, table.", argName, input));
+    }
+}
+
 } // namespace wsl::windows::wslc::validation

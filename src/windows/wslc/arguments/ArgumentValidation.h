@@ -14,12 +14,15 @@ Abstract:
 #pragma once
 
 #include "Exceptions.h"
+#include "ContainerModel.h"
 #include <string>
 #include <vector>
 #include <charconv>
 #include <format>
 #include <wslaservice.h>
 #include <string.hpp>
+
+using namespace wsl::windows::wslc::models;
 
 namespace wsl::windows::wslc::validation {
 
@@ -47,8 +50,10 @@ T GetIntegerFromString(const std::wstring& value, const std::wstring& argName = 
     return convertedValue;
 }
 
-// Non-template functions can stay in .cpp
 void ValidateWSLASignalFromString(const std::vector<std::wstring>& values, const std::wstring& argName);
 WSLASignal GetWSLASignalFromString(const std::wstring& input, const std::wstring& argName = {});
+
+void ValidateFormatTypeFromString(const std::vector<std::wstring>& values, const std::wstring& argName);
+FormatType GetFormatTypeFromString(const std::wstring& input, const std::wstring& argName = {});
 
 } // namespace wsl::windows::wslc::validation
