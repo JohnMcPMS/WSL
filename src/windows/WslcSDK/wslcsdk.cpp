@@ -528,7 +528,7 @@ STDAPI WslcContainerSettingsSetPortMapping(
 try
 {
     auto internalType = CheckAndGetInternalType(containerSettings);
-    RETURN_HR_IF(E_INVALIDARG, portMappings == nullptr && portMappingCount != 0);
+    RETURN_HR_IF(E_INVALIDARG, (portMappings == nullptr && portMappingCount != 0) || (portMappings != nullptr && portMappingCount == 0));
 
     internalType->ports = portMappings;
     internalType->portsCount = portMappingCount;
@@ -542,7 +542,13 @@ STDAPI WslcContainerSettingsSetVolumes(
 try
 {
     auto internalType = CheckAndGetInternalType(containerSettings);
-    RETURN_HR_IF(E_INVALIDARG, volumes == nullptr && volumeCount != 0);
+    RETURN_HR_IF(E_INVALIDARG, (volumes == nullptr && volumeCount != 0) || (volumes != nullptr && volumeCount == 0));
+
+    for (uint32_t i = 0; i < volumeCount; ++i)
+    {
+        RETURN_HR_IF_NULL(E_INVALIDARG, volumes[i].windowsPath);
+        RETURN_HR_IF_NULL(E_INVALIDARG, volumes[i].containerPath);
+    }
 
     internalType->volumes = volumes;
     internalType->volumesCount = volumeCount;

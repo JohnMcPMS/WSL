@@ -628,6 +628,14 @@ class WslcSdkTests
             VERIFY_ARE_EQUAL(WslcContainerSettingsSetPortMapping(&containerSettings, nullptr, 1), E_INVALIDARG);
         }
 
+        // Negative: non-null pointer with zero count must fail.
+        {
+            WslcContainerSettings containerSettings;
+            VERIFY_SUCCEEDED(WslcContainerInitSettings("debian:latest", &containerSettings));
+            WslcContainerPortMapping portMappings[1] = {};
+            VERIFY_ARE_EQUAL(WslcContainerSettingsSetPortMapping(&containerSettings, portMappings, 0), E_INVALIDARG);
+        }
+
         // Positive: null mappings with zero count must succeed (clears the mapping).
         {
             WslcContainerSettings containerSettings;
@@ -720,6 +728,29 @@ class WslcSdkTests
             VERIFY_ARE_EQUAL(WslcContainerSettingsSetVolumes(&containerSettings, nullptr, 1), E_INVALIDARG);
         }
 
+        // Negative: non-null pointer with zero count must fail.
+        {
+            WslcContainerSettings containerSettings;
+            VERIFY_SUCCEEDED(WslcContainerInitSettings("debian:latest", &containerSettings));
+            WslcContainerVolume containerVolumes[1] = {};
+            VERIFY_ARE_EQUAL(WslcContainerSettingsSetVolumes(&containerSettings, containerVolumes, 0), E_INVALIDARG);
+        }
+
+        // Negative: null paths must fail.
+        {
+            WslcContainerSettings containerSettings;
+            VERIFY_SUCCEEDED(WslcContainerInitSettings("debian:latest", &containerSettings));
+            WslcContainerVolume containerVolumes[1] = {nullptr, "path"};
+            VERIFY_ARE_EQUAL(WslcContainerSettingsSetVolumes(&containerSettings, containerVolumes, ARRAYSIZE(containerVolumes)), E_INVALIDARG);
+        }
+
+        {
+            WslcContainerSettings containerSettings;
+            VERIFY_SUCCEEDED(WslcContainerInitSettings("debian:latest", &containerSettings));
+            WslcContainerVolume containerVolumes[1] = {L"path", nullptr};
+            VERIFY_ARE_EQUAL(WslcContainerSettingsSetVolumes(&containerSettings, containerVolumes, ARRAYSIZE(containerVolumes)), E_INVALIDARG);
+        }
+
         // Positive: null volumes with zero count must succeed (clears volumes).
         {
             WslcContainerSettings containerSettings;
@@ -789,13 +820,11 @@ class WslcSdkTests
             HANDLE exitEvent = nullptr;
             VERIFY_SUCCEEDED(WslcProcessGetExitEvent(process.get(), &exitEvent));
 
-            HANDLE rawStdout = nullptr;
-            VERIFY_SUCCEEDED(WslcProcessGetIOHandles(process.get(), WSLC_PROCESS_IO_HANDLE_STDOUT, &rawStdout));
-            wil::unique_handle ownedStdout(rawStdout);
+            wil::unique_handle ownedStdout;
+            VERIFY_SUCCEEDED(WslcProcessGetIOHandles(process.get(), WSLC_PROCESS_IO_HANDLE_STDOUT, &ownedStdout));
 
-            HANDLE rawStderr = nullptr;
-            VERIFY_SUCCEEDED(WslcProcessGetIOHandles(process.get(), WSLC_PROCESS_IO_HANDLE_STDERR, &rawStderr));
-            wil::unique_handle ownedStderr(rawStderr);
+            wil::unique_handle ownedStderr;
+            VERIFY_SUCCEEDED(WslcProcessGetIOHandles(process.get(), WSLC_PROCESS_IO_HANDLE_STDERR, &ownedStderr));
 
             ContainerOutput output;
             wsl::windows::common::relay::MultiHandleWait io;
@@ -871,13 +900,11 @@ class WslcSdkTests
             HANDLE exitEvent = nullptr;
             VERIFY_SUCCEEDED(WslcProcessGetExitEvent(process.get(), &exitEvent));
 
-            HANDLE rawStdout = nullptr;
-            VERIFY_SUCCEEDED(WslcProcessGetIOHandles(process.get(), WSLC_PROCESS_IO_HANDLE_STDOUT, &rawStdout));
-            wil::unique_handle ownedStdout(rawStdout);
+            wil::unique_handle ownedStdout;
+            VERIFY_SUCCEEDED(WslcProcessGetIOHandles(process.get(), WSLC_PROCESS_IO_HANDLE_STDOUT, &ownedStdout));
 
-            HANDLE rawStderr = nullptr;
-            VERIFY_SUCCEEDED(WslcProcessGetIOHandles(process.get(), WSLC_PROCESS_IO_HANDLE_STDERR, &rawStderr));
-            wil::unique_handle ownedStderr(rawStderr);
+            wil::unique_handle ownedStderr;
+            VERIFY_SUCCEEDED(WslcProcessGetIOHandles(process.get(), WSLC_PROCESS_IO_HANDLE_STDERR, &ownedStderr));
 
             std::string stdoutOutput;
             wsl::windows::common::relay::MultiHandleWait io;
