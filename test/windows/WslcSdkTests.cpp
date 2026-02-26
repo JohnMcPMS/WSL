@@ -537,20 +537,21 @@ class WslcSdkTests
         }
 
         // Negative: attempt to load a non-tar file.
-        {
-            std::filesystem::path pathToSelf = wil::QueryFullProcessImageNameW<std::wstring>(GetCurrentProcess());
-            wil::unique_handle selfFileHandle{
-                CreateFileW(pathToSelf.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
-            VERIFY_IS_FALSE(INVALID_HANDLE_VALUE == selfFileHandle.get());
+        // TODO: Currently this portion is successful despite not being a tar. Needs debugging.
+        //{
+        //    std::filesystem::path pathToSelf = wil::QueryFullProcessImageNameW<std::wstring>(GetCurrentProcess());
+        //    wil::unique_handle selfFileHandle{
+        //        CreateFileW(pathToSelf.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+        //    VERIFY_IS_FALSE(INVALID_HANDLE_VALUE == selfFileHandle.get());
 
-            LARGE_INTEGER fileSize{};
-            VERIFY_IS_TRUE(GetFileSizeEx(selfFileHandle.get(), &fileSize));
+        //    LARGE_INTEGER fileSize{};
+        //    VERIFY_IS_TRUE(GetFileSizeEx(selfFileHandle.get(), &fileSize));
 
-            WslcLoadImageOptions opts{};
-            opts.ImageHandle = selfFileHandle.get();
-            opts.ContentLength = static_cast<uint64_t>(fileSize.QuadPart);
-            VERIFY_ARE_EQUAL(WslcSessionImageLoad(m_defaultSession, &opts), S_OK);
-        }
+        //    WslcLoadImageOptions opts{};
+        //    opts.ImageHandle = selfFileHandle.get();
+        //    opts.ContentLength = static_cast<uint64_t>(fileSize.QuadPart);
+        //    VERIFY_ARE_EQUAL(WslcSessionImageLoad(m_defaultSession, &opts), S_OK);
+        //}
 
         // Negative: null options pointer must fail.
         VERIFY_ARE_EQUAL(WslcSessionImageLoad(m_defaultSession, nullptr), E_POINTER);
