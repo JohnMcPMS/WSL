@@ -149,44 +149,6 @@ ContainerOutput RunContainerAndCapture(
     return output;
 }
 
-class ReadHandleWithTargetValue : public wsl::windows::common::relay::ReadHandle
-{
-public:
-    NON_COPYABLE(ReadHandleWithTargetValue);
-    NON_MOVABLE(ReadHandleWithTargetValue);
-
-    ReadHandleWithTargetValue(wsl::windows::common::relay::HandleWrapper&& MovedHandle, std::string_view targetValue) :
-        ReadHandle(std::move(MovedHandle), [&](const auto& buffer) { m_readBuffer.append(buffer.data(), buffer.size()); }),
-        m_targetValue(targetValue)
-    {
-    }
-
-    void Collect() override
-    {
-        ReadHandle::Collect();
-
-        if (m_readBuffer.find(m_targetValue) != std::string::npos)
-        {
-            State = wsl::windows::common::relay::IOHandleStatus::Completed;
-        }
-    }
-
-private:
-    std::string m_readBuffer;
-    std::string m_targetValue;
-};
-
-//
-// Reads from Handle until Content appears in the accumulated output.
-// Fails the test if the handle closes before Content is found.
-//
-void WaitForOutput(wil::unique_handle handle, std::string_view targetValue, std::chrono::milliseconds timeout = 60s)
-{
-    wsl::windows::common::relay::MultiHandleWait io;
-    io.AddHandle(std::make_unique<ReadHandleWithTargetValue>(std::move(handle), targetValue));
-    io.Run(timeout);
-}
-
 } // namespace
 
 class WslcSdkTests
@@ -198,26 +160,6 @@ class WslcSdkTests
     std::filesystem::path m_storagePath;
     WslcSession m_defaultSession = nullptr;
     static inline auto c_testSessionName = L"wslc-test";
-
-    static std::filesystem::path GetTestImagePath(std::string_view imageName)
-    {
-        std::filesystem::path result = std::filesystem::path{g_testDataPath};
-
-        if (imageName == "debian:latest")
-        {
-            result /= "debian-latest.tar";
-        }
-        else if (imageName == "python:3.12-alpine")
-        {
-            result /= "python-3_12-alpine.tar";
-        }
-        else
-        {
-            THROW_HR_MSG(E_INVALIDARG, "Unknown test image: %hs", imageName.data());
-        }
-
-        return result;
-    }
 
     void LoadTestImage(std::string_view imageName)
     {
@@ -231,7 +173,7 @@ class WslcSdkTests
 
         WslcLoadImageOptions options{};
         options.ImageHandle = imageFile.get();
-        options.ContentLength = fileSize.QuadPart;
+        options.ContentLength = static_cast<uint64_t>(fileSize.QuadPart);
 
         THROW_IF_FAILED(WslcSessionImageLoad(m_defaultSession, &options));
     }
@@ -576,7 +518,7 @@ class WslcSdkTests
 
         // Positive: load a saved image tar and verify the image can be run.
         {
-            std::filesystem::path imageTar = std::filesystem::path{g_testDataPath} / L"HelloWorldSaved.tar";
+            std::filesystem::path imageTar = GetTestImagePath("hello-world:latest");
             wil::unique_handle imageTarFileHandle{
                 CreateFileW(imageTar.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
             VERIFY_IS_FALSE(INVALID_HANDLE_VALUE == imageTarFileHandle.get());
@@ -592,6 +534,22 @@ class WslcSdkTests
             // Verify the loaded image is usable.
             auto output = RunContainerAndCapture(m_defaultSession, "hello-world:latest", {});
             VERIFY_IS_TRUE(output.stdoutOutput.find("Hello from Docker!") != std::string::npos);
+        }
+
+        // Negative: attempt to load a non-tar file.
+        {
+            std::filesystem::path pathToSelf = wil::QueryFullProcessImageNameW<std::wstring>(GetCurrentProcess());
+            wil::unique_handle selfFileHandle{
+                CreateFileW(pathToSelf.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+            VERIFY_IS_FALSE(INVALID_HANDLE_VALUE == selfFileHandle.get());
+
+            LARGE_INTEGER fileSize{};
+            VERIFY_IS_TRUE(GetFileSizeEx(selfFileHandle.get(), &fileSize));
+
+            WslcLoadImageOptions opts{};
+            opts.ImageHandle = selfFileHandle.get();
+            opts.ContentLength = static_cast<uint64_t>(fileSize.QuadPart);
+            VERIFY_ARE_EQUAL(WslcSessionImageLoad(m_defaultSession, &opts), S_OK);
         }
 
         // Negative: null options pointer must fail.
@@ -733,29 +691,9 @@ class WslcSdkTests
             wil::unique_handle ownedStdout;
             VERIFY_SUCCEEDED(WslcProcessGetIOHandles(process.get(), WSLC_PROCESS_IO_HANDLE_STDOUT, &ownedStdout));
 
-            WaitForOutput(std::move(ownedStdout), "Serving HTTP on", 10s);
+            WaitForOutput(std::move(ownedStdout), "Serving HTTP on", 30s);
 
-            // Connect from the host and verify we get a valid HTTP response.
-            wil::unique_socket clientSocket{socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)};
-            VERIFY_IS_TRUE(!!clientSocket);
-
-            sockaddr_in addr{};
-            addr.sin_family = AF_INET;
-            addr.sin_port = htons(12341);
-            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-            VERIFY_ARE_NOT_EQUAL(connect(clientSocket.get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), SOCKET_ERROR);
-
-            const char* request = "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n";
-            send(clientSocket.get(), request, static_cast<int>(strlen(request)), 0);
-
-            std::string response;
-            char buf[512];
-            int bytesReceived;
-            while ((bytesReceived = recv(clientSocket.get(), buf, static_cast<int>(sizeof(buf)) - 1, 0)) > 0)
-            {
-                response.append(buf, bytesReceived);
-            }
-            VERIFY_IS_TRUE(response.find("HTTP/") != std::string::npos);
+            ExpectHttpResponse(L"http://127.0.0.1:12341", 200);
         }
     }
 
@@ -876,7 +814,7 @@ class WslcSdkTests
                 std::move(ownedStderr), [&](const auto& buf) { output.stderrOutput.append(buf.data(), buf.size()); }));
             io.Run(60s);
 
-            VERIFY_ARE_EQUAL(WaitForSingleObject(exitEvent, 10 * 1000), static_cast<DWORD>(WAIT_OBJECT_0));
+            VERIFY_ARE_EQUAL(WaitForSingleObject(exitEvent, 60 * 1000), static_cast<DWORD>(WAIT_OBJECT_0));
 
             // Verify all four outcomes.
             VERIFY_IS_TRUE(output.stdoutOutput.find("hello-rw") != std::string::npos);

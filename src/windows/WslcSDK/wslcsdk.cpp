@@ -86,7 +86,7 @@ WSLASignal ConvertSignal(WslcSignal signal)
     case WSLC_SIGNAL_SIGTERM:
         return WSLASignal::WSLASignalSIGTERM;
     default:
-        THROW_HR(E_INVALIDARG);
+        THROW_HR_MSG(E_INVALIDARG, "Invalid WslcSignal: %i", signal);
     }
 }
 
@@ -99,7 +99,7 @@ WSLA_CONTAINER_NETWORK_TYPE Convert(WslcContainerNetworkingMode mode)
     case WSLC_CONTAINER_NETWORKING_MODE_BRIDGED:
         return WSLA_CONTAINER_NETWORK_BRIDGE;
     default:
-        THROW_HR(E_INVALIDARG);
+        THROW_HR_MSG(E_INVALIDARG, "Invalid WslcContainerNetworkingMode: %i", mode);
     }
 }
 
@@ -529,6 +529,12 @@ try
 {
     auto internalType = CheckAndGetInternalType(containerSettings);
     RETURN_HR_IF(E_INVALIDARG, (portMappings == nullptr && portMappingCount != 0) || (portMappings != nullptr && portMappingCount == 0));
+
+    for (uint32_t i = 0; i < portMappingCount; ++i)
+    {
+        RETURN_HR_IF(E_NOTIMPL, portMappings[i].windowsAddress != nullptr);
+        RETURN_HR_IF(E_NOTIMPL, portMappings[i].protocol != 0);
+    }
 
     internalType->ports = portMappings;
     internalType->portsCount = portMappingCount;
