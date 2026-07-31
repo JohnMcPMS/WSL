@@ -25,15 +25,18 @@ set(SOURCES
     # Supporting classes
     DockerEventTracker.cpp
     DockerHTTPClient.cpp
+    ElfCoreDump.cpp
     IORelay.cpp
     OptionParser.cpp
     ServiceProcessLauncher.cpp
+    WerReport.cpp
     WindowsCertStore.cpp
     )
 
 set(HEADERS
     DockerEventTracker.h
     DockerHTTPClient.h
+    ElfCoreDump.h
     IORelay.h
     OptionParser.h
     ServiceProcessLauncher.h
@@ -51,7 +54,8 @@ set(HEADERS
     WSLCGuestVolume.h
     WSLCVolumes.h
     IWSLCVolume.h
-    WSLCVolumeMetadata.h)
+    WSLCVolumeMetadata.h
+    WerReport.h)
 
 add_executable(wslcsession WIN32 ${SOURCES} ${HEADERS})
 add_dependencies(wslcsession wslserviceidl)
@@ -62,7 +66,8 @@ target_link_libraries(wslcsession
                       common
                       legacy_stdio_definitions
                       VirtDisk.lib
-                      Crypt32.lib)
+                      Crypt32.lib
+                      wer.lib)
 
 target_precompile_headers(wslcsession REUSE_FROM common)
 set_target_properties(wslcsession PROPERTIES FOLDER windows)

@@ -18,7 +18,9 @@ Abstract:
 #include "WSLCVirtualMachine.h"
 #include <format>
 #include <filesystem>
+#include "ElfCoreDump.h"
 #include "ServiceProcessLauncher.h"
+#include "WerReport.h"
 #include "wslutil.h"
 #include "lxinitshared.h"
 
@@ -1392,6 +1394,16 @@ void WSLCVirtualMachine::CollectCrashDumps(wil::unique_socket&& listenSocket)
             relay::InterruptableRelay(reinterpret_cast<HANDLE>(channel.Socket()), file.get(), nullptr);
 
             file.reset();
+
+            // Parse the core dump and submit a WER report. Both steps are best-effort;
+            // failures are logged but never propagated to the caller. If parsing fails
+            // there is insufficient information to submit a meaningful WER report.
+            try
+            {
+                const auto crashInfo = ParseElfCoreDump(fullPath);
+                SubmitLinuxCrashWerReport(fullPath, process, crashSignal, crashInfo);
+            }
+            CATCH_LOG_MSG("WER submission failed for crash dump: %ls", fullPath.c_str());
 
             // Notify the session that a crash dump has been fully written. The session fans out
             // to any registered ICrashDumpCallback subscribers. Failures are caller-handled.
