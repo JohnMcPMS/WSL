@@ -9,6 +9,7 @@ set(SOURCES
     Dmesg.cpp
     DnsResolver.cpp
     DnsTunnelingChannel.cpp
+    ElfCoreDump.cpp
     ExecutionContext.cpp
     filesystem.cpp
     GnsChannel.cpp
@@ -37,6 +38,7 @@ set(SOURCES
     SubProcess.cpp
     svccomm.cpp
     VTSupport.cpp
+    WerReport.cpp
     WindowsUpdateIntegration.cpp
     WSLCContainerLauncher.cpp
     ConsommeNetworking.cpp
@@ -94,6 +96,7 @@ set(HEADERS
     Dmesg.h
     DnsResolver.h
     DnsTunnelingChannel.h
+    ElfCoreDump.h
     ExecutionContext.h
     filesystem.hpp
     GnsChannel.h
@@ -144,6 +147,7 @@ set(HEADERS
     EnumVariantMap.h
     WSLCUserSettings.h
     WSLCSessionDefaults.h
+    WerReport.h
     )
 
 add_library(common STATIC ${SOURCES} ${HEADERS})
