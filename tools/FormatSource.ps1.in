@@ -115,12 +115,22 @@ elseif ($ModifiedOnly -or $Staged) {
         }
         else {
             $Status = (& git status --porcelain)
+            Write-Verbose "git status output: $Status"
             $Success = ($LASTEXITCODE -eq 0)
             $Status | ForEach-Object {
                 $FullPath = (Resolve-Path ($_.Trim() -split " ", 2)[-1] -ErrorAction SilentlyContinue)
-                $FileName = Split-Path -Leaf -Path $FullPath
-                if ($FileName -match $FilePatterns) {
-                    $ModifiedFiles += $FullPath
+                if ($null -eq $FullPath) {
+                    Write-Verbose "Could not resolve path for line: $_"
+                }
+                else {
+                    $FileName = Split-Path -Leaf -Path $FullPath
+                    if ($FileName -match $FilePatterns) {
+                        Write-Verbose "Found modified file: $FileName ($FullPath)"
+                        $ModifiedFiles += $FullPath
+                    }
+                    else {
+                        Write-Verbose "Ignoring non-source file: $FileName ($FullPath)"
+                    }
                 }
             }
         }
