@@ -3433,11 +3433,33 @@ class WSLCTests
     // python3 -c "import ctypes; ctypes.string_at(0)" dereferences address 0 inside a
     // ctypes C extension (a .so), producing a hardware SIGSEGV with si_code=SEGV_MAPERR(1).
     // The crash IP therefore lands inside a shared library, not in python3 itself.
+    //
+    // The WSLC base OS image does not include python3, so this test runs inside a
+    // python:3.12-alpine container on m_defaultSession (which has the image pre-loaded).
     WSLC_TEST_METHOD(CrashDumpCrashInLibc)
     {
-        auto session = CreateSession(GetDefaultSessionSettings(L"crash-dump-crash-in-libc"));
-        const auto [info, signal] =
-            RunCrashAndParse(session.get(), {"/bin/sh", "-c", "python3 -c \"import ctypes; ctypes.string_at(0)\""}, 128 + WSLCSignalSIGSEGV);
+        std::promise<CrashDumpParseCapture::Invocation> promise;
+        wil::unique_event release{wil::EventOptions::ManualReset};
+        auto callback = Microsoft::WRL::Make<CrashDumpParseCapture>(promise, release);
+        auto releaseCallback = wil::scope_exit([&]() { release.SetEvent(); });
+
+        wil::com_ptr<IUnknown> subscription;
+        VERIFY_SUCCEEDED(m_defaultSession->RegisterCrashDumpCallback(callback.Get(), &subscription));
+
+        WSLCContainerLauncher launcher(
+            "python:3.12-alpine", "crash-dump-crash-in-libc", {"python3", "-c", "import ctypes; ctypes.string_at(0)"});
+        auto container = launcher.Launch(*m_defaultSession);
+        auto process = container.GetInitProcess();
+
+        auto result = process.WaitAndCaptureOutput(30'000);
+        VERIFY_ARE_EQUAL(result.Code, 128 + WSLCSignalSIGSEGV);
+
+        auto future = promise.get_future();
+        VERIFY_ARE_EQUAL(future.wait_for(std::chrono::seconds(30)), std::future_status::ready);
+        const auto inv = future.get();
+
+        const auto info = wsl::windows::common::ParseElfCoreDump(inv.dumpPath);
+        const ULONG signal = inv.signal;
 
         constexpr uint16_t c_emX86_64 = 62;
         constexpr uint16_t c_emAarch64 = 183;
@@ -3462,10 +3484,18 @@ class WSLCTests
             std::format(L"moduleName \"{}\" is not a shared library", MultiByteToWide(info.moduleName.c_str())).c_str());
         VERIFY_IS_GREATER_THAN(info.moduleOffset, static_cast<uint64_t>(0));
 
-        // The module's build ID must be valid hex when present.
+        // The module's build ID must be non-empty and valid hex (the ELF header page is
+        // always captured in the core, so the build ID is reliably accessible).
+        VERIFY_IS_FALSE(info.moduleBuildId.empty(), L"moduleBuildId is empty; expected build ID from shared library ELF header");
         VERIFY_IS_TRUE(
-            info.moduleBuildId.empty() || info.moduleBuildId.find_first_not_of("0123456789abcdef") == std::string::npos,
+            info.moduleBuildId.find_first_not_of("0123456789abcdef") == std::string::npos,
             std::format(L"moduleBuildId \"{}\" is not valid hex", MultiByteToWide(info.moduleBuildId.c_str())).c_str());
+
+        // Process build ID must also be non-empty and valid hex.
+        VERIFY_IS_FALSE(info.processBuildId.empty(), L"processBuildId is empty; expected build ID from main executable ELF header");
+        VERIFY_IS_TRUE(
+            info.processBuildId.find_first_not_of("0123456789abcdef") == std::string::npos,
+            std::format(L"processBuildId \"{}\" is not valid hex", MultiByteToWide(info.processBuildId.c_str())).c_str());
     }
 
     WSLC_TEST_METHOD(BuildImageStuckCallbackCancellation)

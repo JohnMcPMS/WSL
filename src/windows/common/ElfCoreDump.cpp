@@ -441,7 +441,7 @@ std::string ReadModuleBuildId(const CoreView& core, const std::vector<LoadSegmen
         IterateNotes(noteData, noteFilesz, [&](uint32_t type, std::string_view name, const uint8_t* desc, uint32_t descSize) {
             if (type == c_ntGnuBuildId && name == "GNU" && descSize > 0)
             {
-                buildId = WideToMultiByte(BytesToHex({desc, desc + descSize}).substr(2));
+                buildId = WideToMultiByte(BytesToHex(std::vector<BYTE>(desc, desc + descSize)).substr(2));
                 return false; // stop
             }
             return true;
@@ -504,6 +504,10 @@ ElfCrashInfo DoParse(const CoreView& core, const Ehdr& ehdr)
         std::string path;
     };
     std::vector<FileEntry> fileMap;
+
+    // Full Linux path of the main executable (from AT_EXECFN); used after note
+    // iteration to look up the executable's base VA in fileMap.
+    std::string execFullPath;
 
     for (const auto& [noteFileOffset, noteFileSize] : noteParts)
     {
@@ -676,6 +680,7 @@ ElfCrashInfo DoParse(const CoreView& core, const Ehdr& ehdr)
                                     const size_t len = nul ? static_cast<size_t>(nul - strPtr) : maxLen;
                                     const auto fullPath = std::string(reinterpret_cast<const char*>(strPtr), len);
                                     info.processName = LinuxBasename(fullPath);
+                                    execFullPath = fullPath;
                                 }
                             }
                         }
@@ -684,8 +689,8 @@ ElfCrashInfo DoParse(const CoreView& core, const Ehdr& ehdr)
             }
             else if (name == "GNU" && type == c_ntGnuBuildId && info.processBuildId.empty() && descSize > 0)
             {
-                // The first GNU build ID note in the core's own PT_NOTE is for the main executable.
-                info.processBuildId = WideToMultiByte(BytesToHex({desc, desc + descSize}).substr(2));
+                // Some core formats embed a GNU build ID note directly in the core's PT_NOTE.
+                info.processBuildId = WideToMultiByte(BytesToHex(std::vector<BYTE>(desc, desc + descSize)).substr(2));
             }
 
             return true; // continue iteration
@@ -693,6 +698,26 @@ ElfCrashInfo DoParse(const CoreView& core, const Ehdr& ehdr)
     }
 
     THROW_HR_IF_MSG(E_INVALIDARG, !hasCrashIp, "No NT_PRSTATUS note found; cannot determine crash instruction pointer");
+
+    // --- Extract process build ID from the executable's in-memory ELF image ---
+    // The kernel's core PT_NOTE does not embed NT_GNU_BUILD_ID for the executable
+    // on most Linux versions. Read it the same way we read module build IDs: find the
+    // executable's base VA in fileMap and follow its own PT_NOTE program header.
+    if (info.processBuildId.empty() && !execFullPath.empty())
+    {
+        uint64_t exeBase = UINT64_MAX;
+        for (const auto& entry : fileMap)
+        {
+            if (entry.path == execFullPath && entry.start < exeBase)
+            {
+                exeBase = entry.start;
+            }
+        }
+        if (exeBase != UINT64_MAX)
+        {
+            info.processBuildId = ReadModuleBuildId(core, loads, exeBase);
+        }
+    }
 
     // --- Identify the blamed module from NT_FILE ---
     const FileEntry* blamedEntry = nullptr;
@@ -708,10 +733,23 @@ ElfCrashInfo DoParse(const CoreView& core, const Ehdr& ehdr)
     if (blamedEntry)
     {
         info.moduleName = LinuxBasename(blamedEntry->path);
-        info.moduleOffset = crashIp - blamedEntry->start;
 
-        // Attempt to extract the blamed module's build ID from its in-memory ELF image.
-        info.moduleBuildId = ReadModuleBuildId(core, loads, blamedEntry->start);
+        // Find the ELF base of the blamed module: the lowest mapped start VA for entries
+        // with the same path.  A shared library typically has multiple NT_FILE entries
+        // (separate r-x, r--, rw- segments); the ELF header lives in the first one.
+        // blamedEntry->start may be a later segment whose pages are not captured in the
+        // core, while the first segment's page always is (coredump_filter bit 4).
+        uint64_t moduleElfBase = blamedEntry->start;
+        for (const auto& entry : fileMap)
+        {
+            if (entry.path == blamedEntry->path && entry.start < moduleElfBase)
+            {
+                moduleElfBase = entry.start;
+            }
+        }
+
+        info.moduleOffset = crashIp - moduleElfBase;
+        info.moduleBuildId = ReadModuleBuildId(core, loads, moduleElfBase);
     }
 
     return info;
