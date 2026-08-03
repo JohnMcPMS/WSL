@@ -24,9 +24,11 @@ Abstract:
 #include "wslc/e2e/WSLCE2EHelpers.h"
 #include "HttpHeaderEndDetector.h"
 #include <nlohmann/json.hpp>
+#include "ElfCoreDump.h"
 
 using namespace std::literals::chrono_literals;
 using namespace wsl::windows::common::registry;
+using namespace wsl::windows::common::string;
 using wsl::windows::common::RunningWSLCContainer;
 using wsl::windows::common::RunningWSLCProcess;
 using wsl::windows::common::WSLCContainerLauncher;
@@ -3287,6 +3289,183 @@ class WSLCTests
             invocation.DumpPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
         VERIFY_IS_TRUE(dumpFile.is_valid());
         VERIFY_IS_GREATER_THAN(std::filesystem::file_size(invocation.DumpPath), 0ull);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Crash dump parse tests — shared infrastructure
+    //
+    // All three tests below use RunCrashAndParse(), which:
+    //   1. Registers a CrashDumpParseCapture callback on the session.
+    //   2. Runs a command expected to crash.
+    //   3. Waits up to 60 s for the dump callback.
+    //   4. Calls ParseElfCoreDump on the received dump path.
+    //   5. Returns the parsed ElfCrashInfo and the signal number from the service.
+    // ---------------------------------------------------------------------------
+
+    // Capture callback shared by all crash-dump parse tests.
+    class DECLSPEC_UUID("4C5D6E7F-8A9B-0C1D-2E3F-4A5B6C7D8E9F") CrashDumpParseCapture
+        : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, ICrashDumpCallback, IFastRundown, Microsoft::WRL::FtmBase>
+    {
+    public:
+        struct Invocation
+        {
+            std::wstring dumpPath;
+            ULONG signal;
+        };
+
+        CrashDumpParseCapture(std::promise<Invocation>& promise, wil::unique_event& release) :
+            m_promise(promise), m_release(release)
+        {
+        }
+
+        HRESULT OnCrashDump(LPCWSTR DumpPath, LPCSTR, ULONG, ULONG Signal, ULONGLONG) override
+        {
+            m_promise.set_value({DumpPath ? std::wstring{DumpPath} : std::wstring{}, Signal});
+            m_release.wait();
+            return S_OK;
+        }
+
+    private:
+        std::promise<Invocation>& m_promise;
+        wil::unique_event& m_release;
+    };
+
+    struct ParsedCrashDump
+    {
+        wsl::windows::common::ElfCrashInfo info;
+        ULONG signal;
+    };
+
+    ParsedCrashDump RunCrashAndParse(IWSLCSession* session, const std::vector<std::string>& command, int expectedExitCode)
+    {
+        std::promise<CrashDumpParseCapture::Invocation> promise;
+        wil::unique_event release{wil::EventOptions::ManualReset};
+        auto callback = Microsoft::WRL::Make<CrashDumpParseCapture>(promise, release);
+        auto releaseCallback = wil::scope_exit([&]() { release.SetEvent(); });
+
+        wil::com_ptr<IUnknown> subscription;
+        VERIFY_SUCCEEDED(session->RegisterCrashDumpCallback(callback.Get(), &subscription));
+
+        ExpectCommandResult(session, command, expectedExitCode);
+
+        auto future = promise.get_future();
+        VERIFY_ARE_EQUAL(future.wait_for(std::chrono::seconds(30)), std::future_status::ready);
+        const auto inv = future.get();
+
+        return {wsl::windows::common::ParseElfCoreDump(inv.dumpPath), inv.signal};
+    }
+
+    // Validate parsed ELF fields from a SIGSEGV delivered via kill() from the shell.
+    // kill() produces si_code=SI_USER(0); processName should identify the sh process.
+    WSLC_TEST_METHOD(CrashDumpParsedFieldsSIGSEGV)
+    {
+        auto session = CreateSession(GetDefaultSessionSettings(L"crash-dump-parsed-fields-sigsegv"));
+        const auto [info, signal] = RunCrashAndParse(session.get(), {"/bin/sh", "-c", "kill -SEGV $$"}, 128 + WSLCSignalSIGSEGV);
+
+        constexpr uint16_t c_emX86_64 = 62;
+        constexpr uint16_t c_emAarch64 = 183;
+
+        VERIFY_ARE_EQUAL(signal, static_cast<ULONG>(WSLCSignalSIGSEGV));
+        VERIFY_IS_TRUE(
+            info.elfMachine == c_emX86_64 || info.elfMachine == c_emAarch64, L"elfMachine is not a recognized WSL architecture");
+
+        // processName comes from AT_EXECFN in NT_AUXV; should name the shell.
+        VERIFY_IS_FALSE(info.processName.empty(), L"processName is empty");
+        VERIFY_IS_TRUE(
+            info.processName.find("sh") != std::string::npos,
+            std::format(L"processName \"{}\" does not contain \"sh\"", MultiByteToWide(info.processName.c_str())).c_str());
+
+        // processBuildId is optional but must be valid hex when present.
+        VERIFY_IS_TRUE(
+            info.processBuildId.empty() || info.processBuildId.find_first_not_of("0123456789abcdef") == std::string::npos,
+            std::format(L"processBuildId \"{}\" is not valid hex", MultiByteToWide(info.processBuildId.c_str())).c_str());
+
+        // Signal sent via kill() → si_code=SI_USER=0.
+        VERIFY_ARE_EQUAL(info.siCode, 0u);
+
+        // moduleName and moduleOffset must be jointly present or jointly absent.
+        VERIFY_ARE_EQUAL(info.moduleName.empty(), info.moduleOffset == 0, L"moduleName and moduleOffset are inconsistent");
+        if (!info.moduleName.empty())
+        {
+            VERIFY_IS_TRUE(
+                info.moduleBuildId.empty() || info.moduleBuildId.find_first_not_of("0123456789abcdef") == std::string::npos,
+                std::format(L"moduleBuildId \"{}\" is not valid hex", MultiByteToWide(info.moduleBuildId.c_str())).c_str());
+        }
+    }
+
+    // Validate parsed ELF fields from a SIGABRT delivered via kill() from the shell.
+    // si_code=SI_USER(0) as for SIGSEGV; validates the parser handles a different signal.
+    WSLC_TEST_METHOD(CrashDumpParsedFieldsSIGABRT)
+    {
+        auto session = CreateSession(GetDefaultSessionSettings(L"crash-dump-parsed-fields-sigabrt"));
+        const auto [info, signal] = RunCrashAndParse(session.get(), {"/bin/sh", "-c", "kill -ABRT $$"}, 128 + WSLCSignalSIGABRT);
+
+        constexpr uint16_t c_emX86_64 = 62;
+        constexpr uint16_t c_emAarch64 = 183;
+
+        VERIFY_ARE_EQUAL(signal, static_cast<ULONG>(WSLCSignalSIGABRT));
+        VERIFY_IS_TRUE(
+            info.elfMachine == c_emX86_64 || info.elfMachine == c_emAarch64, L"elfMachine is not a recognized WSL architecture");
+
+        VERIFY_IS_FALSE(info.processName.empty(), L"processName is empty");
+        VERIFY_IS_TRUE(
+            info.processName.find("sh") != std::string::npos,
+            std::format(L"processName \"{}\" does not contain \"sh\"", MultiByteToWide(info.processName.c_str())).c_str());
+
+        VERIFY_IS_TRUE(
+            info.processBuildId.empty() || info.processBuildId.find_first_not_of("0123456789abcdef") == std::string::npos,
+            std::format(L"processBuildId \"{}\" is not valid hex", MultiByteToWide(info.processBuildId.c_str())).c_str());
+
+        VERIFY_ARE_EQUAL(info.siCode, 0u);
+
+        VERIFY_ARE_EQUAL(info.moduleName.empty(), info.moduleOffset == 0, L"moduleName and moduleOffset are inconsistent");
+        if (!info.moduleName.empty())
+        {
+            VERIFY_IS_TRUE(
+                info.moduleBuildId.empty() || info.moduleBuildId.find_first_not_of("0123456789abcdef") == std::string::npos,
+                std::format(L"moduleBuildId \"{}\" is not valid hex", MultiByteToWide(info.moduleBuildId.c_str())).c_str());
+        }
+    }
+
+    // Validate that a hardware NULL-dereference inside a shared library is correctly
+    // attributed to that library and not to the main executable.
+    //
+    // python3 -c "import ctypes; ctypes.string_at(0)" dereferences address 0 inside a
+    // ctypes C extension (a .so), producing a hardware SIGSEGV with si_code=SEGV_MAPERR(1).
+    // The crash IP therefore lands inside a shared library, not in python3 itself.
+    WSLC_TEST_METHOD(CrashDumpCrashInLibc)
+    {
+        auto session = CreateSession(GetDefaultSessionSettings(L"crash-dump-crash-in-libc"));
+        const auto [info, signal] =
+            RunCrashAndParse(session.get(), {"/bin/sh", "-c", "python3 -c \"import ctypes; ctypes.string_at(0)\""}, 128 + WSLCSignalSIGSEGV);
+
+        constexpr uint16_t c_emX86_64 = 62;
+        constexpr uint16_t c_emAarch64 = 183;
+
+        VERIFY_ARE_EQUAL(signal, static_cast<ULONG>(WSLCSignalSIGSEGV));
+        VERIFY_IS_TRUE(
+            info.elfMachine == c_emX86_64 || info.elfMachine == c_emAarch64, L"elfMachine is not a recognized WSL architecture");
+
+        // processName should identify the python3 interpreter.
+        VERIFY_IS_FALSE(info.processName.empty(), L"processName is empty");
+        VERIFY_IS_TRUE(
+            info.processName.find("python") != std::string::npos,
+            std::format(L"processName \"{}\" does not contain \"python\"", MultiByteToWide(info.processName.c_str())).c_str());
+
+        // Hardware fault at address 0 → SEGV_MAPERR=1.
+        VERIFY_ARE_EQUAL(info.siCode, 1u);
+
+        // The blamed module must be a shared library (.so), not the python3 executable.
+        VERIFY_IS_FALSE(info.moduleName.empty(), L"moduleName is empty; expected crash IP inside a shared library");
+        VERIFY_IS_TRUE(
+            info.moduleName.find(".so") != std::string::npos,
+            std::format(L"moduleName \"{}\" is not a shared library", MultiByteToWide(info.moduleName.c_str())).c_str());
+        VERIFY_IS_GREATER_THAN(info.moduleOffset, static_cast<uint64_t>(0));
+
+        // The module's build ID must be valid hex when present.
+        VERIFY_IS_TRUE(
+            info.moduleBuildId.empty() || info.moduleBuildId.find_first_not_of("0123456789abcdef") == std::string::npos,
+            std::format(L"moduleBuildId \"{}\" is not valid hex", MultiByteToWide(info.moduleBuildId.c_str())).c_str());
     }
 
     WSLC_TEST_METHOD(BuildImageStuckCallbackCancellation)
