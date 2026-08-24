@@ -80,7 +80,7 @@ void wsl::windows::common::SubmitLinuxCrashWerReport(
         // WerReportApplicationCrash attributes the report to this process but uses custom
         // parameters for backend bucketing. WerReportCritical is inappropriate here because
         // wslcsession.exe is not crashing; a Linux guest process is.
-        THROW_IF_FAILED(WerReportCreate(L"WSLLinuxProcessCrash", WerReportApplicationCrash, nullptr, hReport.put()));
+        THROW_IF_FAILED(WerReportCreate(L"WSLCProcessCrash", WerReportApplicationCrash, nullptr, hReport.put()));
 
         // Parameters match the WER bucketing schema (P0–P7); order must stay stable.
         // TODO: confirm final parameter names and order with the WER event registration owner.
